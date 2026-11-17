@@ -381,8 +381,8 @@ class KubeConfigLoader:
 
             jwt_attributes = self._decode_jwt_token(
                 provider['config']['id-token'])
+            expire = jwt_attributes.get('exp')
 
-        expire = jwt_attributes.get('exp') if jwt_attributes is not None else None
         if expire is not None:
             self.expiry = datetime.datetime.fromtimestamp(expire, tz=UTC)
         else:
