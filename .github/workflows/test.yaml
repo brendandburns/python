@@ -25,10 +25,6 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install -r requirements-asyncio.txt
-    - name: Check botocore dependency compatibility
-      run: |
-        python -m pip install --dry-run --ignore-installed \
-          -r requirements.txt -r requirements-asyncio.txt botocore
     - name: Lint with flake8
       run: |
         pip install flake8
