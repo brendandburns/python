@@ -380,7 +380,7 @@ class KubeConfigLoader:
                 self._config_persister()
 
             jwt_attributes = self._decode_jwt_token(
-                provider['config']['id-token'])
+                provider['config']['id-token']) or {}
             expire = jwt_attributes.get('exp')
 
         if expire is not None:
