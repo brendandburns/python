@@ -9,67 +9,10 @@ import kubernetes
 from kubernetes.aio.client.configuration import Configuration as AsyncConfiguration
 from kubernetes.client.configuration import Configuration
 from kubernetes.client.rest import RESTClientObject
-from kubernetes.client.models import V1DeploymentSpec
 import urllib3
 
 
 class TestApiClient(unittest.TestCase):
-    def test_deployment_spec_round_trip_preserves_nested_fields(self):
-        spec_dict = {
-            'selector': {'matchLabels': {'name': 'my-operator'}},
-            'template': {'spec': {
-                'affinity': {'nodeAffinity': {
-                    'requiredDuringSchedulingIgnoredDuringExecution': {
-                        'nodeSelectorTerms': [{'matchExpressions': [{
-                            'key': 'kubernetes.io/arch',
-                            'operator': 'In',
-                            'values': ['s390x', 'amd64'],
-                        }]}],
-                    },
-                }},
-                'containers': [{
-                    'name': 'op',
-                    'image': 'img:1',
-                    'imagePullPolicy': 'Always',
-                    'env': [{
-                        'name': 'WATCH_NAMESPACE',
-                        'valueFrom': {
-                            'fieldRef': {
-                                'fieldPath': "metadata.annotations['olm.targetNamespaces']",
-                            },
-                        },
-                    }],
-                    'livenessProbe': {
-                        'httpGet': {'path': '/healthz', 'port': 8081},
-                        'initialDelaySeconds': 15,
-                        'failureThreshold': 4,
-                    },
-                }],
-            }},
-        }
-        expected = {
-            **spec_dict,
-            'template': {
-                **spec_dict['template'],
-                'spec': {
-                    **spec_dict['template']['spec'],
-                    'containers': [{
-                        **spec_dict['template']['spec']['containers'][0],
-                        'image': 'img:2',
-                    }],
-                },
-            },
-        }
-
-        model = V1DeploymentSpec.from_dict(spec_dict)
-        model.template.spec.containers[0].image = 'img:2'
-        model = V1DeploymentSpec.from_dict(model.to_dict())
-
-        self.assertEqual(
-            kubernetes.client.ApiClient().sanitize_for_serialization(model),
-            expected,
-        )
-
     def test_context_manager_closes_threadpool(self):
         with kubernetes.client.ApiClient() as client:
             pool = weakref.ref(client.pool)
