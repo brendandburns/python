@@ -285,6 +285,10 @@ class ApiClient:
         # header parameters
         header_params = header_params or {}
         header_params.update(self.default_headers)
+        if body is not None and not any(
+            header.lower() == 'content-type' for header in header_params
+        ):
+            header_params['Content-Type'] = 'application/json'
         if self.cookie:
             header_params['Cookie'] = self.cookie
         if header_params:

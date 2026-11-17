@@ -70,12 +70,14 @@ class _RecordingHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers['Content-Length'])
         self.server.request_body = self.rfile.read(length)
+        self.server.content_type = self.headers.get('Content-Type')
         self.server.request_path = self.path
         self._respond()
 
     def do_DELETE(self):
         length = int(self.headers.get('Content-Length', 0))
         self.server.request_body = self.rfile.read(length)
+        self.server.content_type = self.headers.get('Content-Type')
         self.server.request_path = self.path
         self._respond()
 
@@ -521,6 +523,8 @@ class GeneratedApiTest(unittest.TestCase):
                     self.assertEqual(response, deleted)
                     self.assertEqual(response['kind'], deleted['kind'])
                     self.assertEqual(expected_status, deleted['status'])
+                    self.assertEqual(
+                        'application/json', self.server.content_type)
                     if response['kind'] == 'Job':
                         self.assertIsInstance(deleted['status'], dict)
                         self.assertIsNot(response['status'], deleted['status'])
@@ -532,6 +536,20 @@ class GeneratedApiTest(unittest.TestCase):
                         '/apis/batch/v1/namespaces/default/jobs/sample',
                         self.server.request_path,
                     )
+
+    def test_create_job_sends_json_content_type(self):
+        body = {
+            'apiVersion': 'batch/v1',
+            'kind': 'Job',
+            'metadata': {'name': 'sample'},
+        }
+
+        BatchV1Api(self.api_client).create_namespaced_job(
+            namespace='default', body=body,
+        )
+
+        self.assertEqual('application/json', self.server.content_type)
+        self.assertEqual(body, json.loads(self.server.request_body))
 
     def test_delete_job_with_http_info_preserves_resource_response(self):
         response = {
