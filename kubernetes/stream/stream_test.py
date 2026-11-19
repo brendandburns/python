@@ -12,17 +12,72 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+import socket
 import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import websocket
+
 from kubernetes import client
+from kubernetes.stream import stream
 
 from . import ws_client
 from .stream import _websocket_request
 
 
 class StreamTest(unittest.TestCase):
+    def test_exec_preserves_json_and_other_output(self):
+        json_output = '{"example":"json","with":null,"and":true}'
+        outputs = [
+            json_output,
+            ' \n{"example": "quoted \\"text\\"", "with": null, "and": true}\n',
+            'before ' + json_output + '\nafter\n',
+            'ordinary output\n',
+        ]
+        for binary, preload in [(False, True), (False, False),
+                                (True, True), (True, False)]:
+            for output in outputs + ([b'\xff\x00\n'] if binary else []):
+                with self.subTest(binary=binary, preload=preload,
+                                  output=output):
+                    payload = (output.encode('utf-8')
+                               if isinstance(output, str) else output)
+                    expected = payload if binary else output
+                    server_sock, client_sock = socket.socketpair()
+                    with server_sock, client_sock:
+                        ws = websocket.WebSocket()
+                        ws.sock = client_sock
+                        ws.connected = True
+                        frame = websocket.ABNF(
+                            1, 0, 0, 0, websocket.ABNF.OPCODE_BINARY, 0,
+                            bytes([ws_client.STDOUT_CHANNEL]) + payload,
+                        )
+                        close = websocket.ABNF(
+                            1, 0, 0, 0, websocket.ABNF.OPCODE_CLOSE, 0,
+                            b'\x03\xe8',
+                        )
+                        server_sock.sendall(frame.format() + close.format())
+                        with patch.object(ws_client, 'create_websocket',
+                                          return_value=ws):
+                            api = client.CoreV1Api()
+                            result = stream(
+                                api.connect_get_namespaced_pod_exec,
+                                'pod', 'default', command=['echo', 'output'],
+                                _preload_content=preload, binary=binary,
+                            )
+                            if not preload:
+                                self.assertIsInstance(result,
+                                                      ws_client.WSClient)
+                                result = result.read_stdout(timeout=5)
+
+                    self.assertEqual(expected, result)
+                    if output == json_output and not binary:
+                        self.assertEqual(
+                            {'example': 'json', 'with': None, 'and': True},
+                            json.loads(result),
+                        )
+
     def test_generated_portforward_preserves_multiple_ports(self):
         api = client.CoreV1Api(client.ApiClient(client.Configuration(
             host='https://example.com',
