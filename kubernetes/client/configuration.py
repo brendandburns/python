@@ -388,13 +388,15 @@ conf = client.Configuration(
         """Options to pass down to the underlying urllib3 socket
         """
         self.keep_alive = False
-        """Enable TCP keepalive on the underlying urllib3 sockets.
+        """Enable TCP keepalive on the underlying urllib3 sockets and periodic
+           WebSocket ping frames for synchronous exec streams. WebSocket pings
+           are sent every 30 seconds to help prevent idle intermediary timeouts.
+           They only help when proxies forward WebSocket control frames; servers
+           and proxies can still close idle streams.
 
-           Long lived requests such as watches are otherwise dropped
-           silently by an idle proxy or load balancer. When enabled, the
-           client asks the kernel for the same keepalive timings client-go
-           uses. Ignored if ``socket_options`` is set, which takes
-           precedence.
+           For TCP keepalive, the client asks the kernel for the same timings
+           client-go uses. ``socket_options`` takes precedence over those TCP
+           options.
         """
 
         self.datetime_format = datetime_format
