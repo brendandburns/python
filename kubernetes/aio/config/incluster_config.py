@@ -14,6 +14,7 @@
 
 import datetime
 import os
+import time
 
 from kubernetes.aio.client import Configuration
 
@@ -93,7 +94,7 @@ class InClusterConfigLoader(object):
             return
 
         def _refresh_api_key(client_configuration):
-            if self.token_expires_at <= datetime.datetime.now():
+            if time.monotonic() >= self._token_refresh_deadline:
                 self._read_token_file()
             self._set_config(client_configuration)
 
@@ -105,8 +106,8 @@ class InClusterConfigLoader(object):
             if not content:
                 raise ConfigException("Token file exists but empty.")
             self.token = "bearer " + content
-            self.token_expires_at = datetime.datetime.now(
-            ) + self._token_refresh_period
+            self._token_refresh_deadline = (
+                time.monotonic() + self._token_refresh_period.total_seconds())
 
 
 def load_incluster_config(client_configuration=None, try_refresh_token=True):
