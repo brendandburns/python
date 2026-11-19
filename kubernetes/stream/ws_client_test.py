@@ -547,6 +547,48 @@ class WSClientUpdateTest(unittest.TestCase):
             return WSClient(self.config_mock, "wss://test", headers=None,
                             capture_all=True, binary=True)
 
+    def test_update_pings_before_controlled_proxy_idle_timeout(self):
+        now = [0]
+        last_activity = [0]
+        idle_timeout = 3
+        remote_process_running = True
+
+        class ControlledProxyPoll:
+            def register(self, *_args):
+                pass
+
+            def unregister(self, *_args):
+                pass
+
+            def poll(self, timeout):
+                now[0] += timeout / 1000
+                if now[0] - last_activity[0] >= idle_timeout:
+                    mock_ws.connected = False
+                    return [(10, select.POLLHUP)]
+                return []
+
+        mock_ws = MagicMock()
+        mock_ws.subprotocol = V4_CHANNEL_PROTOCOL
+        mock_ws.connected = True
+        mock_ws.sock.connected = True
+        mock_ws.sock.fileno.return_value = 10
+        mock_ws.recv_data_frame.return_value = (
+            websocket.ABNF.OPCODE_CLOSE,
+            MagicMock(),
+        )
+        mock_ws.ping.side_effect = lambda *_args: last_activity.__setitem__(0, now[0])
+
+        client = self._make_client(mock_ws)
+        client.ping_interval = 1
+
+        with patch('select.poll', ControlledProxyPoll), \
+                patch('time.monotonic', side_effect=lambda: now[0]):
+            client.update(timeout=5)
+
+        self.assertTrue(remote_process_running)
+        self.assertTrue(client.is_open())
+        self.assertGreater(mock_ws.ping.call_count, 0)
+
     def test_update_reads_frames_pending_in_ssl_buffer(self):
         """Verify update reads a frame buffered inside the SSL socket even
         when the underlying socket does not report as readable.
