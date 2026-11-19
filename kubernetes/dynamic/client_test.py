@@ -262,7 +262,8 @@ class DynamicClientTest(unittest.TestCase):
                 _request_timeout=request_timeout,
             ))
 
-            self.assertEqual(request_timeout, watcher.kwargs['_request_timeout'])
+            self.assertEqual(
+                request_timeout, watcher.kwargs['_request_timeout'])
             self.assertEqual(30, watcher.kwargs['timeout_seconds'])
 
         watcher = FakeWatcher()
