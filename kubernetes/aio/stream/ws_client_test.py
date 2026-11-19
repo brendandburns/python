@@ -75,7 +75,9 @@ class WSClientTest(IsolatedAsyncioTestCase):
                 'wss://localhost/api/v1/namespaces/namespace/pods/pod/exec?'
                 'command=mock-command&stderr=true&stdin=false&stdout=true&tty=false',
                 headers={
-                    'sec-websocket-protocol': 'v4.channel.k8s.io',
+                    'sec-websocket-protocol': (
+                        'v5.channel.k8s.io,v4.channel.k8s.io'
+                    ),
                     'Accept': '*/*',
                     'User-Agent': api_client.user_agent
                 },
@@ -102,7 +104,9 @@ class WSClientTest(IsolatedAsyncioTestCase):
                 'wss://localhost/api/v1/namespaces/namespace/pods/pod/exec?'
                 'command=mock-command&stderr=true&stdin=false&stdout=true&tty=false',
                 headers={
-                    'sec-websocket-protocol': 'v4.channel.k8s.io',
+                    'sec-websocket-protocol': (
+                        'v5.channel.k8s.io,v4.channel.k8s.io'
+                    ),
                     'Accept': '*/*',
                     'User-Agent': api_client.user_agent
                 },
