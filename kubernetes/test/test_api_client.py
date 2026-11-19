@@ -1,6 +1,7 @@
 # coding: utf-8
 
 
+import json
 import unittest
 from unittest import mock
 import weakref
@@ -42,6 +43,32 @@ class TestApiClient(unittest.TestCase):
                     client._ApiClient__deserialize(expected, response_type),
                     expected,
                 )
+
+    def test_controller_revision_data_preserves_arbitrary_nested_fields(self):
+        data = {
+            'spec': {
+                'nested': {
+                    'arbitrary': ['value', 17, False, None],
+                    'unknownField': {'a': 1},
+                },
+            },
+            'custom': [{'x': {'y': 'z'}}],
+        }
+        response = {
+            'apiVersion': 'apps/v1',
+            'kind': 'ControllerRevision',
+            'metadata': {'name': 'sample', 'namespace': 'default'},
+            'revision': 7,
+            'data': data,
+        }
+
+        revision = kubernetes.client.ApiClient().deserialize(
+            json.dumps(response),
+            'V1ControllerRevision',
+            'application/json',
+        )
+
+        self.assertEqual(revision.data, data)
 
     def test_rest_proxycare(self):
 
