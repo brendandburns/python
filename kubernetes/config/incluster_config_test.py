@@ -17,6 +17,7 @@ import os
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from kubernetes.client import Configuration
 
@@ -61,14 +62,15 @@ class InClusterConfigTest(unittest.TestCase):
     def get_test_loader(self,
                         token_filename=None,
                         cert_filename=None,
-                        environ=_TEST_ENVIRON):
+                        environ=_TEST_ENVIRON,
+                        try_refresh_token=True):
         if not token_filename:
             token_filename = self._create_file_with_temp_content(_TEST_TOKEN)
         if not cert_filename:
             cert_filename = self._create_file_with_temp_content(_TEST_CERT)
         return InClusterConfigLoader(token_filename=token_filename,
                                      cert_filename=cert_filename,
-                                     try_refresh_token=True,
+                                     try_refresh_token=try_refresh_token,
                                      environ=environ)
 
     def test_join_host_port(self):
@@ -93,20 +95,52 @@ class InClusterConfigTest(unittest.TestCase):
         self.assertEqual('bearer ' + _TEST_TOKEN,
                          config.get_api_key_with_prefix('BearerToken'))
         self.assertEqual('bearer ' + _TEST_TOKEN, loader.token)
-        self.assertIsNotNone(loader.token_expires_at)
+        self.assertIsNotNone(loader._token_refresh_deadline)
 
         old_token = loader.token
-        old_token_expires_at = loader.token_expires_at
+        old_token_refresh_deadline = loader._token_refresh_deadline
         loader._token_filename = self._create_file_with_temp_content(
             _TEST_NEW_TOKEN)
         self.assertEqual('bearer ' + _TEST_TOKEN,
                          config.get_api_key_with_prefix('BearerToken'))
 
-        loader.token_expires_at = datetime.datetime.now()
+        loader._token_refresh_deadline = time.monotonic()
         self.assertEqual('bearer ' + _TEST_NEW_TOKEN,
                          config.get_api_key_with_prefix('BearerToken'))
         self.assertEqual('bearer ' + _TEST_NEW_TOKEN, loader.token)
-        self.assertGreater(loader.token_expires_at, old_token_expires_at)
+        self.assertGreater(loader._token_refresh_deadline,
+                           old_token_refresh_deadline)
+
+    def test_refresh_token_after_wall_clock_moves_back(self):
+        loader = self.get_test_loader()
+        config = Configuration()
+        loader.load_and_set(config)
+        loader._token_filename = self._create_file_with_temp_content(
+            _TEST_NEW_TOKEN)
+        monotonic_deadline = (
+            time.monotonic() + loader._token_refresh_period.total_seconds()
+            + 1)
+        earlier_wall_clock = datetime.datetime.now() - datetime.timedelta(
+            hours=1)
+
+        with patch('datetime.datetime') as wall_clock, patch(
+                'time.monotonic', return_value=monotonic_deadline):
+            wall_clock.now.return_value = earlier_wall_clock
+            config.get_api_key_with_prefix('BearerToken')
+
+        self.assertEqual('bearer ' + _TEST_NEW_TOKEN, loader.token)
+
+    def test_refresh_token_disabled(self):
+        loader = self.get_test_loader(try_refresh_token=False)
+        config = Configuration()
+        loader.load_and_set(config)
+        loader._token_filename = self._create_file_with_temp_content(
+            _TEST_NEW_TOKEN)
+
+        self.assertIsNone(config.refresh_api_key_hook)
+        self.assertEqual('bearer ' + _TEST_TOKEN,
+                         config.get_api_key_with_prefix('BearerToken'))
+        self.assertEqual('bearer ' + _TEST_TOKEN, loader.token)
 
     def test_load_incluster_sets_request_authorization_header(self):
         from kubernetes.client import ApiClient
