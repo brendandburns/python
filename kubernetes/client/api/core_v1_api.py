@@ -50719,6 +50719,8 @@ class CoreV1Api:
         """read_namespaced_pod_log
 
         read log of the specified Pod
+        An incomplete trailing UTF-8 character is omitted; other decode
+        errors are raised.
 
         :param name: name of the Pod (required)
         :type name: str
@@ -50795,7 +50797,7 @@ class CoreV1Api:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "str",
+            '200': "str_pod_log",
             '401': None,
         }
         return self.api_client._call_with_legacy_options(
@@ -50842,6 +50844,8 @@ class CoreV1Api:
         """read_namespaced_pod_log
 
         read log of the specified Pod
+        An incomplete trailing UTF-8 character is omitted; other decode
+        errors are raised.
 
         :param name: name of the Pod (required)
         :type name: str
@@ -50918,7 +50922,7 @@ class CoreV1Api:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "str",
+            '200': "str_pod_log",
             '401': None,
         }
         return self.api_client._call_with_legacy_options(

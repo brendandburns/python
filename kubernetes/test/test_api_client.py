@@ -14,7 +14,7 @@ import urllib3
 
 
 class TestApiClient(unittest.TestCase):
-    def test_pod_log_truncated_utf8_response_raises(self):
+    def test_pod_log_truncated_utf8_response_omits_incomplete_character(self):
         api_client = kubernetes.client.ApiClient()
         self.addCleanup(api_client.close)
         api_client.call_api = mock.Mock(
@@ -26,11 +26,110 @@ class TestApiClient(unittest.TestCase):
             ))
         )
 
+        log = kubernetes.client.CoreV1Api(api_client).read_namespaced_pod_log(
+            name='pod',
+            namespace='default',
+            limit_bytes=len('log: café'.encode('utf-8')) - 1,
+        )
+
+        self.assertEqual(log, 'log: caf')
+
+    def test_pod_log_with_http_info_preserves_complete_utf8(self):
+        api_client = kubernetes.client.ApiClient()
+        self.addCleanup(api_client.close)
+        api_client.call_api = mock.Mock(
+            return_value=RESTResponse(SimpleNamespace(
+                status=200,
+                reason='OK',
+                data='log: café'.encode('utf-8'),
+                headers={'content-type': 'text/plain; charset=utf-8'},
+            ))
+        )
+
+        response = (
+            kubernetes.client.CoreV1Api(api_client)
+            .read_namespaced_pod_log_with_http_info(
+                name='pod',
+                namespace='default',
+                limit_bytes=len('log: café'.encode('utf-8')),
+            )
+        )
+
+        self.assertEqual(response[0], 'log: café')
+
+    def test_pod_log_raw_response_remains_bytes(self):
+        api_client = kubernetes.client.ApiClient()
+        self.addCleanup(api_client.close)
+        response = SimpleNamespace(
+            status=200,
+            reason='OK',
+            data=b'log: \xc3',
+            headers={'content-type': 'text/plain; charset=utf-8'},
+        )
+        api_client.call_api = mock.Mock(return_value=RESTResponse(response))
+
+        raw_response = kubernetes.client.CoreV1Api(
+            api_client
+        ).read_namespaced_pod_log(
+            name='pod',
+            namespace='default',
+            limit_bytes=len(response.data),
+            _preload_content=False,
+        )
+
+        self.assertIs(raw_response, response)
+        self.assertEqual(raw_response.data, b'log: \xc3')
+
+    def test_pod_log_invalid_utf8_still_raises(self):
+        api_client = kubernetes.client.ApiClient()
+        self.addCleanup(api_client.close)
+        api_client.call_api = mock.Mock(
+            return_value=RESTResponse(SimpleNamespace(
+                status=200,
+                reason='OK',
+                data=b'log: \xff',
+                headers={'content-type': 'text/plain; charset=utf-8'},
+            ))
+        )
+
         with self.assertRaises(UnicodeDecodeError):
             kubernetes.client.CoreV1Api(api_client).read_namespaced_pod_log(
                 name='pod',
                 namespace='default',
-                limit_bytes=len('log: café'.encode('utf-8')) - 1,
+            )
+
+    def test_regular_string_response_still_rejects_invalid_utf8(self):
+        api_client = kubernetes.client.ApiClient()
+        self.addCleanup(api_client.close)
+        response = RESTResponse(SimpleNamespace(
+            status=200,
+            reason='OK',
+            data=b'log: \xc3',
+            headers={'content-type': 'text/plain; charset=utf-8'},
+        ))
+        response.read()
+
+        with self.assertRaises(UnicodeDecodeError):
+            api_client.response_deserialize(
+                response_data=response,
+                response_types_map={'200': 'str'},
+            )
+
+    def test_structured_response_still_rejects_truncated_utf8(self):
+        api_client = kubernetes.client.ApiClient()
+        self.addCleanup(api_client.close)
+        response = RESTResponse(SimpleNamespace(
+            status=200,
+            reason='OK',
+            data=b'{"value": "ok"}\xc3',
+            headers={'content-type': 'application/json; charset=utf-8'},
+        ))
+        response.read()
+
+        with self.assertRaises(UnicodeDecodeError):
+            api_client.response_deserialize(
+                response_data=response,
+                response_types_map={'200': 'Dict[str, str]'},
             )
 
     def test_context_manager_closes_threadpool(self):

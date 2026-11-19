@@ -425,7 +425,20 @@ class ApiClient:
                 if content_type is not None:
                     match = re.search(r"charset=([a-zA-Z\-\d]+)[\s;]?", content_type)
                 encoding = match.group(1) if match else "utf-8"
-                response_text = response_data.data.decode(encoding)
+                if response_type == "str_pod_log":
+                    response_type = "str"
+                    is_utf8 = encoding.lower().replace("_", "-") in (
+                        "utf-8",
+                        "utf8",
+                    )
+                    if is_utf8:
+                        response_text = self._decode_pod_log(
+                            response_data.data, encoding
+                        )
+                    else:
+                        response_text = response_data.data.decode(encoding)
+                else:
+                    response_text = response_data.data.decode(encoding)
                 return_data = self.deserialize(response_text, response_type, content_type)
         finally:
             if not 200 <= response_data.status <= 299:
@@ -441,6 +454,18 @@ class ApiClient:
             headers = response_data.headers,
             raw_data = response_data.data
         )
+
+    @staticmethod
+    def _decode_pod_log(data: bytes, encoding: str) -> str:
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError as error:
+            if (
+                error.reason != "unexpected end of data"
+                or error.end != len(data)
+            ):
+                raise
+            return data[:error.start].decode(encoding)
 
     def sanitize_for_serialization(self, obj):
         """Builds a JSON POST object.
