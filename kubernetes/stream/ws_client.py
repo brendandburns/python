@@ -17,6 +17,7 @@ from kubernetes.client.rest import ApiException, ApiValueError
 
 import certifi
 import collections
+import math
 import select
 import socket
 import ssl
@@ -24,7 +25,7 @@ import threading
 import time
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from io import StringIO, BytesIO
-from websocket import WebSocket, ABNF, enableTrace, WebSocketConnectionClosedException
+from websocket import WebSocket, ABNF, enableTrace, WebSocketConnectionClosedException, WebSocketTimeoutException
 from base64 import urlsafe_b64decode
 
 import yaml
@@ -49,7 +50,8 @@ class _IgnoredIO:
 
 
 class WSClient:
-    def __init__(self, configuration, url, headers, capture_all, binary=False):
+    def __init__(self, configuration, url, headers, capture_all, binary=False,
+                 connect_timeout=None, use_connect_timeout=False):
         """A websocket client with support for channels.
 
             Exec command uses different channels for different streams. for
@@ -67,7 +69,11 @@ class WSClient:
             self._all = StringIO() if not self.binary else BytesIO()
         else:
             self._all = _IgnoredIO()
-        self.sock = create_websocket(configuration, url, headers)
+        if use_connect_timeout:
+            self.sock = create_websocket(
+                configuration, url, headers, timeout=connect_timeout)
+        else:
+            self.sock = create_websocket(configuration, url, headers)
         self.subprotocol = getattr(self.sock, 'subprotocol', None)
         if not self.subprotocol and self.sock:
             headers_dict = self.sock.getheaders()
@@ -210,7 +216,7 @@ class WSClient:
             r, _, _ = select.select((self.sock.sock, ), (), (), 0)
         return bool(r)
 
-    def update(self, timeout=0):
+    def update(self, timeout=0, _raise_on_timeout=False):
         """Update channel buffers with all complete frames of input that
         are available, waiting at most `timeout` seconds for the first
         one."""
@@ -254,6 +260,8 @@ class WSClient:
             r, _, _ = select.select(
                 (self.sock.sock, ), (), (), timeout)
 
+        if not r and _raise_on_timeout:
+            raise TimeoutError("websocket read timed out")
         while r:
             op_code, frame = self.sock.recv_data_frame(True)
             if op_code == ABNF.OPCODE_CLOSE:
@@ -543,7 +551,7 @@ def get_websocket_url(url, query_params=None):
     return urlunparse(parts)
 
 
-def create_websocket(configuration, url, headers=None):
+def create_websocket(configuration, url, headers=None, **options):
     enableTrace(False)
 
     # We just need to pass the Authorization, ignore all the other
@@ -578,6 +586,11 @@ def create_websocket(configuration, url, headers=None):
     connect_opt = {
          'header': header
     }
+    connect_opt.update(options)
+    if 'timeout' in options:
+        websocket.settimeout(options['timeout'])
+    if options.get('timeout') is not None:
+        connect_opt['http_proxy_timeout'] = options['timeout']
 
     if configuration.proxy or configuration.proxy_headers:
         connect_opt = websocket_proxycare(connect_opt, configuration, url, headers)
@@ -616,17 +629,48 @@ def websocket_call(configuration, _method, url, **kwargs):
     _preload_content = kwargs.get("_preload_content", True)
     capture_all = kwargs.get("capture_all", True)
     binary = kwargs.get('binary', False)
+    tuple_timeout = isinstance(_request_timeout, tuple)
+    client = None
     try:
-        client = WSClient(configuration, url, headers, capture_all, binary=binary)
+        if tuple_timeout:
+            if (len(_request_timeout) != 2 or any(
+                    value is not None and (
+                        isinstance(value, bool)
+                        or not isinstance(value, (int, float))
+                        or not math.isfinite(value) or value <= 0)
+                    for value in _request_timeout)):
+                raise ValueError("tuple timeout must contain two positive finite numbers or None")
+            connect_timeout, read_timeout = _request_timeout
+            if not _preload_content and read_timeout is not None:
+                raise ValueError("tuple read timeout is not supported for streaming; use read/update timeouts")
+            client = WSClient(
+                configuration, url, headers, capture_all, binary=binary,
+                connect_timeout=connect_timeout, use_connect_timeout=True)
+            client.sock.settimeout(read_timeout)
+        else:
+            client = WSClient(configuration, url, headers, capture_all, binary=binary)
         if not _preload_content:
             return client
-        client.run_forever(timeout=_request_timeout)
+        if tuple_timeout and read_timeout is not None:
+            while client.is_open():
+                client.update(timeout=read_timeout, _raise_on_timeout=True)
+        else:
+            client.run_forever(timeout=None if tuple_timeout else _request_timeout)
         all = client.read_all()
         if binary:
             return WSResponse(data=all, status=200)
         else:
             return WSResponse(data='%s' % ''.join(all), status=200)
     except (Exception, KeyboardInterrupt, SystemExit) as e:
+        if tuple_timeout and client is not None:
+            client._connected = False
+            try:
+                client.sock.shutdown()
+            except Exception:
+                pass
+        if (tuple_timeout and client is not None
+                and isinstance(e, (socket.timeout, WebSocketTimeoutException))):
+            raise ApiException(status=0, reason="websocket read timed out")
         raise ApiException(status=0, reason=str(e))
 
 
