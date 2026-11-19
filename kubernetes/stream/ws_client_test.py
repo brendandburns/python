@@ -540,6 +540,7 @@ class WSClientUpdateTest(unittest.TestCase):
         self.config_mock.cert_file = None
         self.config_mock.key_file = None
         self.config_mock.verify_ssl = True
+        self.config_mock.keep_alive = False
 
     def _make_client(self, mock_ws):
         with patch.object(ws_client_module, 'create_websocket') as mock_create:
@@ -576,13 +577,15 @@ class WSClientUpdateTest(unittest.TestCase):
             websocket.ABNF.OPCODE_CLOSE,
             MagicMock(),
         )
-        mock_ws.ping.side_effect = lambda *_args: last_activity.__setitem__(0, now[0])
-
-        client = self._make_client(mock_ws)
-        client.ping_interval = 1
+        mock_ws.ping.side_effect = (
+            lambda *_args: last_activity.__setitem__(0, now[0])
+        )
+        self.config_mock.keep_alive = True
 
         with patch('select.poll', ControlledProxyPoll), \
-                patch('time.monotonic', side_effect=lambda: now[0]):
+                patch('time.monotonic', side_effect=lambda: now[0]), \
+                patch.object(ws_client_module, 'WEBSOCKET_PING_INTERVAL', 1):
+            client = self._make_client(mock_ws)
             client.update(timeout=5)
 
         self.assertTrue(remote_process_running)

@@ -39,6 +39,7 @@ CLOSE_CHANNEL = 255
 
 V4_CHANNEL_PROTOCOL = "v4.channel.k8s.io"
 V5_CHANNEL_PROTOCOL = "v5.channel.k8s.io"
+WEBSOCKET_PING_INTERVAL = 30
 
 class _IgnoredIO:
     def write(self, _x):
@@ -69,6 +70,16 @@ class WSClient:
             self._all = _IgnoredIO()
         self.sock = create_websocket(configuration, url, headers)
         self.subprotocol = getattr(self.sock, 'subprotocol', None)
+        self.ping_interval = (
+            WEBSOCKET_PING_INTERVAL
+            if getattr(configuration, 'keep_alive', False) is True
+            else None
+        )
+        self._next_ping = (
+            time.monotonic() + self.ping_interval
+            if self.ping_interval is not None
+            else None
+        )
         if not self.subprotocol and self.sock:
             headers_dict = self.sock.getheaders()
             if headers_dict:
@@ -220,39 +231,66 @@ class WSClient:
             self._connected = False
             return
 
-        # SSL sockets decrypt an entire TLS record at a time, so a previous
-        # recv_data_frame() call may have pulled the bytes of the next frames
-        # off the socket already: those frames sit decrypted in the
-        # SSLSocket's internal buffer, invisible to select()/poll() on the
-        # underlying socket. Without this check the buffered frames would
-        # only be delivered once new data arrives on the socket, and would be
-        # lost if it never does.
-        if (isinstance(self.sock.sock, ssl.SSLSocket)
-                and self.sock.sock.pending()):
-            r = True
-        # The options here are:
-        # select.select() - this will work on most OS, however, it has a
-        #                   limitation of only able to read fd numbers up to 1024.
-        #                   i.e. does not scale well. This was the original
-        #                   implementation.
-        # select.poll()   - this will work on most unix based OS, but not as
-        #                   efficient as epoll. Will work for fd numbers above 1024.
-        # select.epoll()  - newest and most efficient way of polling.
-        #                   However, only works on linux.
-        elif hasattr(select, "poll"):
-            poll = select.poll()
-            poll.register(self.sock.sock, select.POLLIN)
+        deadline = None
+        if self.ping_interval is not None:
             if timeout is not None and timeout != float("inf"):
-                timeout *= 1_000  # poll method uses milliseconds as the time unit
+                deadline = time.monotonic() + max(timeout, 0)
+
+        while True:
+            wait_timeout = timeout
+            if self.ping_interval is not None:
+                now = time.monotonic()
+                wait_timeout = max(self._next_ping - now, 0)
+                if deadline is not None:
+                    wait_timeout = min(wait_timeout, max(deadline - now, 0))
+
+            # SSL sockets decrypt an entire TLS record at a time, so a previous
+            # recv_data_frame() call may have pulled the bytes of the next frames
+            # off the socket already: those frames sit decrypted in the
+            # SSLSocket's internal buffer, invisible to select()/poll() on the
+            # underlying socket. Without this check the buffered frames would
+            # only be delivered once new data arrives on the socket, and would be
+            # lost if it never does.
+            if (isinstance(self.sock.sock, ssl.SSLSocket)
+                    and self.sock.sock.pending()):
+                r = True
+            # The options here are:
+            # select.select() - this will work on most OS, however, it has a
+            #                   limitation of only able to read fd numbers up to 1024.
+            #                   i.e. does not scale well. This was the original
+            #                   implementation.
+            # select.poll()   - this will work on most unix based OS, but not as
+            #                   efficient as epoll. Will work for fd numbers above 1024.
+            # select.epoll()  - newest and most efficient way of polling.
+            #                   However, only works on linux.
+            elif hasattr(select, "poll"):
+                poll = select.poll()
+                poll.register(self.sock.sock, select.POLLIN)
+                if wait_timeout is not None and wait_timeout != float("inf"):
+                    wait_timeout *= 1_000  # poll method uses milliseconds as the time unit
+                else:
+                    wait_timeout = None
+                r = poll.poll(wait_timeout)
+                poll.unregister(self.sock.sock)
             else:
-                timeout = None
-            r = poll.poll(timeout)
-            poll.unregister(self.sock.sock)
-        else:
-            if timeout == float("inf"):
-                timeout = None
-            r, _, _ = select.select(
-                (self.sock.sock, ), (), (), timeout)
+                if wait_timeout == float("inf"):
+                    wait_timeout = None
+                r, _, _ = select.select(
+                    (self.sock.sock, ), (), (), wait_timeout)
+
+            if r:
+                break
+
+            if self.ping_interval is None:
+                return
+
+            now = time.monotonic()
+            if now >= self._next_ping:
+                self.sock.ping()
+                self._next_ping = now + self.ping_interval
+
+            if deadline is not None and now >= deadline:
+                return
 
         while r:
             op_code, frame = self.sock.recv_data_frame(True)
