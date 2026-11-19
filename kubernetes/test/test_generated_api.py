@@ -41,6 +41,7 @@ from kubernetes.client import (
     V1NetworkPolicyPort,
     V1ObjectMeta,
     V1PodDisruptionBudgetSpec,
+    V1Pod,
     V1PodList,
     V1Probe,
     V1RollingUpdateDaemonSet,
@@ -48,6 +49,7 @@ from kubernetes.client import (
     V1RollingUpdateStatefulSetStrategy,
     V1ServicePort,
     V1StatusCause,
+    V1Status,
     V1TCPSocketAction,
 )
 from kubernetes.client.exceptions import NotFoundException
@@ -452,6 +454,35 @@ class GeneratedApiTest(unittest.TestCase):
 
         self.assertEqual(('limit',), raised.exception.errors()[0]['loc'])
         self.assertFalse(hasattr(self.server, 'request_path'))
+
+    def test_delete_resource_and_status_are_typed(self):
+        api = CoreV1Api(self.api_client)
+        for method, model, kind in (
+            (api.delete_namespaced_config_map, V1ConfigMap, 'ConfigMap'),
+            (api.delete_namespaced_pod, V1Pod, 'Pod'),
+        ):
+            with self.subTest(method=method.__name__, check='annotation'):
+                self.assertEqual(
+                    model | V1Status, inspect.signature(method).return_annotation,
+                )
+            for status in (200, 202):
+                for response_kind, expected in ((kind, model), ('Status', V1Status)):
+                    with self.subTest(method=method.__name__, status=status,
+                                      kind=response_kind):
+                        response = {'apiVersion': 'v1', 'kind': response_kind}
+                        if response_kind == 'Status':
+                            response['status'] = 'Success'
+                        else:
+                            response['metadata'] = {'name': 'sample'}
+                        self.server.response_status = status
+                        self.server.response_body = json.dumps(response).encode()
+                        deleted = method(name='sample', namespace='default')
+                        self.assertIsInstance(deleted, expected)
+                        self.assertEqual(response_kind, deleted.kind)
+                        if response_kind == 'Status':
+                            self.assertEqual('Success', deleted.status)
+                        else:
+                            self.assertEqual('sample', deleted.metadata.name)
 
     def test_delete_namespace_accepts_namespace_and_status_responses(self):
         responses = [

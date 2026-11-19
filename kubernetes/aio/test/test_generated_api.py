@@ -28,6 +28,7 @@ from kubernetes.aio.client import (
     V1ObjectMeta,
     V1Pod,
     V1ServicePort,
+    V1Status,
 )
 from kubernetes.aio.client.rest import RESTClientObject
 from kubernetes.aio.dynamic import DynamicClient
@@ -148,6 +149,36 @@ class GeneratedAsyncApiTest(IsolatedAsyncioTestCase):
         self.assertEqual([], namespaces.items)
         self.assertEqual(2, len(self.requests))
         self.assertIsNone(self.api_client.rest_client.retry_client)
+
+    async def test_delete_resource_and_status_are_typed(self):
+        api = CoreV1Api(self.api_client)
+        for method, model, kind in (
+            (api.delete_namespaced_config_map, V1ConfigMap, 'ConfigMap'),
+            (api.delete_namespaced_pod, V1Pod, 'Pod'),
+        ):
+            with self.subTest(method=method.__name__, check='annotation'):
+                self.assertEqual(
+                    model | V1Status, inspect.signature(method).return_annotation,
+                )
+            for status in (200, 202):
+                for response_kind, expected in ((kind, model), ('Status', V1Status)):
+                    with self.subTest(method=method.__name__, status=status,
+                                      kind=response_kind):
+                        self.response_status = status
+                        self.response = {
+                            'apiVersion': 'v1', 'kind': response_kind,
+                        }
+                        if response_kind == 'Status':
+                            self.response['status'] = 'Success'
+                        else:
+                            self.response['metadata'] = {'name': 'sample'}
+                        deleted = await method(name='sample', namespace='default')
+                        self.assertIsInstance(deleted, expected)
+                        self.assertEqual(response_kind, deleted.kind)
+                        if response_kind == 'Status':
+                            self.assertEqual('Success', deleted.status)
+                        else:
+                            self.assertEqual('sample', deleted.metadata.name)
 
     async def test_delete_job_accepts_job_and_status_responses(self):
         responses = (
