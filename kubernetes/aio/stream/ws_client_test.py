@@ -21,8 +21,10 @@ from kubernetes.aio.stream.ws_client import WsResponse, get_websocket_url
 
 
 class WsMock:
-    def __init__(self):
+    def __init__(self, messages=None, protocol=None):
         self.iter = 0
+        self.messages = messages
+        self.protocol = protocol
 
     def __aiter__(self):
         return self
@@ -35,6 +37,10 @@ class WsMock:
 
     async def __anext__(self):
         self.iter += 1
+        if self.messages is not None:
+            if self.iter > len(self.messages):
+                raise StopAsyncIteration
+            return self.messages[self.iter - 1]
         if self.iter > 5:
             raise StopAsyncIteration
         return WsResponse(200, (chr(1) + 'mock').encode('utf-8'))
@@ -81,6 +87,7 @@ class WSClientTest(IsolatedAsyncioTestCase):
                     'Accept': '*/*',
                     'User-Agent': api_client.user_agent
                 },
+                protocols=['v5.channel.k8s.io', 'v4.channel.k8s.io'],
                 heartbeat=None
             )
 
@@ -110,8 +117,53 @@ class WSClientTest(IsolatedAsyncioTestCase):
                     'Accept': '*/*',
                     'User-Agent': api_client.user_agent
                 },
+                protocols=['v5.channel.k8s.io', 'v4.channel.k8s.io'],
                 heartbeat=30
             )
+
+    async def test_exec_ws_preserves_explicit_subprotocol(self):
+        mock = Mock()
+        mock.RESTClientObject.return_value.pool_manager = mock
+        with patch('kubernetes.aio.client.api_client.rest', mock):
+            api_client = WsApiClient()
+            await api_client.request(
+                'GET',
+                'https://localhost/api',
+                headers={'Sec-WebSocket-Protocol': 'v4.channel.k8s.io'},
+                _preload_content=False,
+            )
+
+        mock.ws_connect.assert_called_once_with(
+            'wss://localhost/api',
+            headers={'Sec-WebSocket-Protocol': 'v4.channel.k8s.io'},
+            protocols=['v4.channel.k8s.io'],
+            heartbeat=None,
+        )
+
+    async def test_exec_ws_v5_channel_close_stops_channel_data(self):
+        mock = Mock()
+        mock.RESTClientObject.return_value.pool_manager = mock
+        mock.ws_connect.return_value = WsMock(
+            messages=[
+                WsResponse(200, b'\x01before'),
+                WsResponse(200, b'\xff\x01'),
+                WsResponse(200, b'\x01after'),
+                WsResponse(200, b'\x02stderr'),
+            ],
+            protocol='v5.channel.k8s.io',
+        )
+        with patch('kubernetes.aio.client.api_client.rest', mock):
+            api_client = WsApiClient()
+            response = await api_client.request(
+                'GET',
+                'https://localhost/api',
+            )
+
+        self.assertEqual(await response.read(), b'beforestderr')
+        self.assertEqual(
+            ['v5.channel.k8s.io', 'v4.channel.k8s.io'],
+            mock.ws_connect.call_args.kwargs['protocols'],
+        )
 
     def test_parse_error_data_success(self):
         error_data = '{"metadata":{},"status":"Success"}'
