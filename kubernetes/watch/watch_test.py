@@ -14,11 +14,16 @@
 
 import json
 import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import threading
 import time
 from types import SimpleNamespace
 from typing import Any, Optional
 import unittest
 from unittest.mock import Mock, call
+from urllib.parse import parse_qs, urlsplit
+
+from urllib3.exceptions import ReadTimeoutError
 
 from kubernetes import client, config
 from kubernetes.client import ApiException
@@ -30,6 +35,122 @@ class WatchTests(unittest.TestCase):
     def setUp(self):
         # counter for a test that needs test global state
         self.callcount = 0
+
+    def test_watch_silent_connection_stays_blocked_without_read_timeout(self):
+        release = threading.Event()
+        received = threading.Event()
+        finished = threading.Event()
+        events = []
+        errors = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header('Transfer-Encoding', 'chunked')
+                self.end_headers()
+                event = (b'{"type":"ADDED","object":{"metadata":'
+                         b'{"name":"test","resourceVersion":"1"}}}\n')
+                self.wfile.write(b'%x\r\n' % len(event) + event + b'\r\n')
+                self.wfile.flush()
+                if release.wait(5):
+                    self.wfile.write(b'0\r\n\r\n')
+                    self.wfile.flush()
+
+            def log_message(self, format, *args):
+                pass
+
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        server_thread = threading.Thread(target=server.serve_forever)
+        server_thread.start()
+        api_client = client.ApiClient(client.Configuration(
+            host='http://127.0.0.1:%s' % server.server_port,
+            proxy='', no_proxy=''))
+        watcher = Watch()
+        api = client.CoreV1Api(api_client)
+
+        def consume():
+            try:
+                for event in watcher.stream(api.list_namespace, timeout_seconds=0):
+                    events.append(event)
+                    received.set()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                finished.set()
+
+        consumer = threading.Thread(target=consume, daemon=True)
+        consumer.start()
+        try:
+            self.assertTrue(received.wait(3))
+            self.assertEqual('1', watcher.resource_version)
+            self.assertFalse(finished.wait(0.3))
+            self.assertEqual(1, len(events))
+        finally:
+            release.set()
+            consumer.join(3)
+            server.shutdown()
+            server_thread.join()
+            server.server_close()
+            api_client.close()
+        self.assertFalse(consumer.is_alive())
+        self.assertEqual([], errors)
+
+    def test_watch_read_timeout_signals_stall_and_can_resume(self):
+        release = threading.Event()
+        paths = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                paths.append(self.path)
+                self.send_response(200)
+                self.send_header('Transfer-Encoding', 'chunked')
+                self.end_headers()
+                version = str(len(paths)).encode()
+                event = (b'{"type":"ADDED","object":{"metadata":'
+                         b'{"name":"test","resourceVersion":"' +
+                         version + b'"}}}\n')
+                self.wfile.write(b'%x\r\n' % len(event) + event + b'\r\n')
+                self.wfile.flush()
+                if len(paths) == 1:
+                    release.wait(5)
+
+            def log_message(self, format, *args):
+                pass
+
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        server_thread = threading.Thread(target=server.serve_forever)
+        server_thread.start()
+        api_client = client.ApiClient(client.Configuration(
+            host='http://127.0.0.1:%s' % server.server_port,
+            proxy='', no_proxy=''))
+        watcher = Watch()
+        api = client.CoreV1Api(api_client)
+        try:
+            stream = watcher.stream(
+                api.list_namespace, timeout_seconds=0,
+                _request_timeout=(1, 0.5))
+            self.assertEqual('1', next(stream)['object'].metadata.resource_version)
+            with self.assertRaises(ReadTimeoutError):
+                next(stream)
+            self.assertEqual('1', watcher.resource_version)
+            self.assertEqual(1, len(paths))
+
+            resumed = watcher.stream(
+                api.list_namespace, timeout_seconds=0,
+                resource_version=watcher.resource_version,
+                _request_timeout=(1, 0.5))
+            self.assertEqual('2', next(resumed)['object'].metadata.resource_version)
+            watcher.stop()
+            with self.assertRaises(StopIteration):
+                next(resumed)
+            self.assertEqual(2, len(paths))
+            self.assertEqual(['1'], parse_qs(urlsplit(paths[1]).query)['resourceVersion'])
+        finally:
+            release.set()
+            server.shutdown()
+            server_thread.join()
+            server.server_close()
+            api_client.close()
 
     def test_generated_api_streams_raw_response(self):
         fake_resp = Mock()
