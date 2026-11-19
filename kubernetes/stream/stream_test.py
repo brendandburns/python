@@ -106,6 +106,7 @@ class StreamTest(unittest.TestCase):
 
         self.assertEqual('hellohello', result)
         self.assertEqual(2, sock.connect.call_args.kwargs['timeout'])
+        sock.settimeout.assert_any_call(2)
         sock.settimeout.assert_called_with(5)
         self.assertEqual([5000, 5000, 5000], [
             call.args[0] for call in poll.return_value.poll.call_args_list])
@@ -128,7 +129,7 @@ class StreamTest(unittest.TestCase):
             with self.assertRaisesRegex(client.ApiException, 'read.*timed out'):
                 stream(api.connect_get_namespaced_pod_exec, 'pod', 'default',
                        command=['echo'], _request_timeout=(2, 5))
-            sock.close.assert_called_once()
+            sock.shutdown.assert_called_once()
 
     def test_exec_streaming_tuple_connect_timeout_without_read_timeout(self):
         configuration = client.Configuration(

@@ -280,6 +280,18 @@ recreate it between api calls that use _stream_ and other api calls.
 
 See more at [exec example](examples/pod_exec.py).
 
+For preloaded exec/attach calls, `_request_timeout=(connect, read)` uses
+separate socket-operation timeouts (seconds): `connect` applies during the
+WebSocket handshake, and `read` limits inactivity between received data, not
+the total command duration. A read timeout raises `ApiException` rather than
+returning partial output. DNS resolution and proxy behavior may not be bounded
+by the connect timeout. Values must be positive finite numbers; the generated
+API does not accept `None` within a tuple. For `_preload_content=False`, tuple
+read timeouts are not supported and are rejected; use the returned client's
+`read_*` or `update` timeout arguments instead. Scalar timeouts retain the
+existing preloaded command-duration behavior and do not limit connection setup;
+interactive callers manage their own read timeouts.
+
 ## Enabling Debug Logging
 
 To enable debug logging in the Kubernetes Python client, follow these steps:
