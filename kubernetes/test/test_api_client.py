@@ -4,15 +4,35 @@
 import unittest
 from unittest import mock
 import weakref
+from types import SimpleNamespace
 
 import kubernetes
 from kubernetes.aio.client.configuration import Configuration as AsyncConfiguration
 from kubernetes.client.configuration import Configuration
-from kubernetes.client.rest import RESTClientObject
+from kubernetes.client.rest import RESTClientObject, RESTResponse
 import urllib3
 
 
 class TestApiClient(unittest.TestCase):
+    def test_pod_log_truncated_utf8_response_raises(self):
+        api_client = kubernetes.client.ApiClient()
+        self.addCleanup(api_client.close)
+        api_client.call_api = mock.Mock(
+            return_value=RESTResponse(SimpleNamespace(
+                status=200,
+                reason='OK',
+                data='log: café'.encode('utf-8')[:-1],
+                headers={'content-type': 'text/plain; charset=utf-8'},
+            ))
+        )
+
+        with self.assertRaises(UnicodeDecodeError):
+            kubernetes.client.CoreV1Api(api_client).read_namespaced_pod_log(
+                name='pod',
+                namespace='default',
+                limit_bytes=len('log: café'.encode('utf-8')) - 1,
+            )
+
     def test_context_manager_closes_threadpool(self):
         with kubernetes.client.ApiClient() as client:
             pool = weakref.ref(client.pool)
