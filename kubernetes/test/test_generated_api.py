@@ -35,21 +35,23 @@ from kubernetes.client import (
     V1HTTPGetAction,
     V1IPBlock,
     V1JSONSchemaProps,
+    V1Job,
     V1LifecycleHandler,
     V1ListMeta,
+    V1Namespace,
     V1NetworkPolicyIngressRule,
     V1NetworkPolicyPort,
     V1ObjectMeta,
-    V1PodDisruptionBudgetSpec,
     V1Pod,
+    V1PodDisruptionBudgetSpec,
     V1PodList,
     V1Probe,
     V1RollingUpdateDaemonSet,
     V1RollingUpdateDeployment,
     V1RollingUpdateStatefulSetStrategy,
     V1ServicePort,
-    V1StatusCause,
     V1Status,
+    V1StatusCause,
     V1TCPSocketAction,
 )
 from kubernetes.client.exceptions import NotFoundException
@@ -484,6 +486,18 @@ class GeneratedApiTest(unittest.TestCase):
                         else:
                             self.assertEqual('sample', deleted.metadata.name)
 
+    def test_delete_rejects_unexpected_or_missing_response_type(self):
+        api = CoreV1Api(self.api_client)
+        for response in (
+            {'apiVersion': 'v1', 'kind': 'Pod'},
+            {'apiVersion': 'example.com/v1', 'kind': 'ConfigMap'},
+            {'kind': 'Status', 'status': 'Success'},
+        ):
+            with self.subTest(response=response):
+                self.server.response_body = json.dumps(response).encode()
+                with self.assertRaises(ValueError):
+                    api.delete_namespaced_config_map('sample', 'default')
+
     def test_delete_namespace_accepts_namespace_and_status_responses(self):
         responses = [
             {
@@ -506,7 +520,12 @@ class GeneratedApiTest(unittest.TestCase):
                 deleted = CoreV1Api(self.api_client).delete_namespace(
                     name='sample')
 
-                self.assertEqual(response, deleted)
+                self.assertIsInstance(
+                    deleted, V1Namespace if response['kind'] == 'Namespace'
+                    else V1Status,
+                )
+                self.assertEqual(
+                    response, deleted.model_dump(by_alias=True, exclude_none=True))
                 self.assertEqual(
                     '/api/v1/namespaces/sample', self.server.request_path)
 
@@ -517,10 +536,10 @@ class GeneratedApiTest(unittest.TestCase):
                     'apiVersion': 'batch/v1',
                     'kind': 'Job',
                     'metadata': {'name': 'sample'},
-                    'spec': {'parallelism': 3},
+                    'spec': {'parallelism': 3, 'template': {}},
                     'status': {'ready': 0},
                 },
-                {'ready': 0},
+                V1Job,
             ),
             (
                 {
@@ -529,12 +548,12 @@ class GeneratedApiTest(unittest.TestCase):
                     'status': 'Success',
                     'details': {'name': 'sample', 'kind': 'jobs'},
                 },
-                'Success',
+                V1Status,
             ),
         )
 
         for response_status in (200, 202):
-            for response, expected_status in responses:
+            for response, expected in responses:
                 with self.subTest(
                     status=response_status, kind=response['kind']
                 ):
@@ -547,17 +566,9 @@ class GeneratedApiTest(unittest.TestCase):
                         name='sample', namespace='default', body={},
                     )
 
-                    self.assertIsInstance(deleted, dict)
-                    self.assertIsNot(response, deleted)
-                    self.assertEqual(response, deleted)
-                    self.assertEqual(response['kind'], deleted['kind'])
-                    self.assertEqual(expected_status, deleted['status'])
-                    if response['kind'] == 'Job':
-                        self.assertIsInstance(deleted['status'], dict)
-                        self.assertIsNot(response['status'], deleted['status'])
-                        self.assertEqual(3, deleted['spec']['parallelism'])
-                    else:
-                        self.assertIsInstance(deleted['status'], str)
+                    self.assertIsInstance(deleted, expected)
+                    self.assertEqual(
+                        response, deleted.model_dump(by_alias=True, exclude_none=True))
                     self.assertEqual({}, json.loads(self.server.request_body))
                     self.assertEqual(
                         '/apis/batch/v1/namespaces/default/jobs/sample',
@@ -580,7 +591,9 @@ class GeneratedApiTest(unittest.TestCase):
             name='sample', namespace='default', body={},
         )
 
-        self.assertEqual(response, deleted)
+        self.assertIsInstance(deleted, V1Job)
+        self.assertEqual(
+            response, deleted.model_dump(by_alias=True, exclude_none=True))
         self.assertEqual(202, status)
         self.assertEqual('application/json', headers['Content-Type'])
         self.assertEqual({}, json.loads(self.server.request_body))

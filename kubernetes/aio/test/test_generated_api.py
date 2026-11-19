@@ -25,6 +25,7 @@ from kubernetes.aio.client import (
     Configuration,
     CoreV1Api,
     V1ConfigMap,
+    V1Job,
     V1ObjectMeta,
     V1Pod,
     V1ServicePort,
@@ -180,6 +181,31 @@ class GeneratedAsyncApiTest(IsolatedAsyncioTestCase):
                         else:
                             self.assertEqual('sample', deleted.metadata.name)
 
+    async def test_delete_with_http_info_returns_typed_status(self):
+        self.response_status = 202
+        self.response = {
+            'apiVersion': 'v1', 'kind': 'Status', 'status': 'Success',
+        }
+        response = await CoreV1Api(
+            self.api_client,
+        ).delete_namespaced_config_map_with_http_info('sample', 'default')
+
+        self.assertEqual(202, response.status_code)
+        self.assertIsInstance(response.data, V1Status)
+        self.assertEqual('Success', response.data.status)
+
+    async def test_delete_rejects_unexpected_or_missing_response_type(self):
+        api = CoreV1Api(self.api_client)
+        for response in (
+            {'apiVersion': 'v1', 'kind': 'Pod'},
+            {'apiVersion': 'example.com/v1', 'kind': 'ConfigMap'},
+            {'kind': 'Status', 'status': 'Success'},
+        ):
+            with self.subTest(response=response):
+                self.response = response
+                with self.assertRaises(ValueError):
+                    await api.delete_namespaced_config_map('sample', 'default')
+
     async def test_delete_job_accepts_job_and_status_responses(self):
         responses = (
             (
@@ -189,8 +215,7 @@ class GeneratedAsyncApiTest(IsolatedAsyncioTestCase):
                     'metadata': {'name': 'sample'},
                     'status': {'ready': 0},
                 },
-                'Job',
-                {'ready': 0},
+                V1Job,
             ),
             (
                 {
@@ -199,15 +224,14 @@ class GeneratedAsyncApiTest(IsolatedAsyncioTestCase):
                     'status': 'Success',
                     'details': {'name': 'sample', 'kind': 'jobs'},
                 },
-                'Status',
-                'Success',
+                V1Status,
             ),
         )
 
         for response_status in (200, 202):
-            for response, expected_kind, expected_status in responses:
+            for response, expected in responses:
                 with self.subTest(
-                    status=response_status, kind=expected_kind
+                    status=response_status, kind=response['kind']
                 ):
                     self.response_status = response_status
                     self.response = response
@@ -217,16 +241,9 @@ class GeneratedAsyncApiTest(IsolatedAsyncioTestCase):
                         name='sample', namespace='default', body={},
                     )
 
-                    self.assertIsInstance(deleted, dict)
-                    self.assertIsNot(response, deleted)
-                    self.assertEqual(response, deleted)
-                    self.assertEqual(expected_kind, deleted['kind'])
-                    self.assertEqual(expected_status, deleted['status'])
-                    if expected_kind == 'Job':
-                        self.assertIsInstance(deleted['status'], dict)
-                        self.assertIsNot(response['status'], deleted['status'])
-                    else:
-                        self.assertIsInstance(deleted['status'], str)
+                    self.assertIsInstance(deleted, expected)
+                    self.assertEqual(
+                        response, deleted.model_dump(by_alias=True, exclude_none=True))
                     request, body = self.requests[-1]
                     self.assertEqual({}, json.loads(body))
                     self.assertEqual(

@@ -99,6 +99,17 @@ python -m examples.example1
 
 (replace example1 with one of the filenames in the examples folder)
 
+### DELETE responses
+
+Individual built-in resource DELETE methods return either the resource model or
+`V1Status`, depending on the server response. For example, use
+`isinstance(result, client.V1Status)` to distinguish a status from a
+`V1ConfigMap`. Methods that previously returned dictionaries now return models;
+use model attributes instead of dictionary keys. In `_with_http_info` responses,
+the model is the first tuple element in the synchronous client and `response.data`
+in the asyncio client. Collection deletes and custom-object deletes are unchanged.
+Responses must include their `apiVersion` and `kind`.
+
 ## Documentation
 
 All APIs and Models' documentation can be found at the [Generated client's README file](kubernetes/README.md)
