@@ -17,6 +17,7 @@ import os
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from kubernetes.client import Configuration
 
@@ -107,6 +108,25 @@ class InClusterConfigTest(unittest.TestCase):
                          config.get_api_key_with_prefix('BearerToken'))
         self.assertEqual('bearer ' + _TEST_NEW_TOKEN, loader.token)
         self.assertGreater(loader.token_expires_at, old_token_expires_at)
+
+    def test_refresh_token_after_wall_clock_moves_back(self):
+        loader = self.get_test_loader()
+        config = Configuration()
+        loader.load_and_set(config)
+        loader._token_filename = self._create_file_with_temp_content(
+            _TEST_NEW_TOKEN)
+        monotonic_deadline = (
+            time.monotonic() + loader._token_refresh_period.total_seconds()
+            + 1)
+        earlier_wall_clock = datetime.datetime.now() - datetime.timedelta(
+            hours=1)
+
+        with patch('datetime.datetime') as wall_clock, patch(
+                'time.monotonic', return_value=monotonic_deadline):
+            wall_clock.now.return_value = earlier_wall_clock
+            config.get_api_key_with_prefix('BearerToken')
+
+        self.assertEqual('bearer ' + _TEST_NEW_TOKEN, loader.token)
 
     def test_load_incluster_sets_request_authorization_header(self):
         from kubernetes.client import ApiClient
