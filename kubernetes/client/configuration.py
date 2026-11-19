@@ -11,7 +11,6 @@
 
 
 import copy
-import http.client as httplib
 import logging
 from logging import FileHandler
 import multiprocessing
@@ -498,10 +497,11 @@ conf = client.Configuration(
 
     @property
     def debug(self) -> bool:
-        """Debug status
+        """Debug status.
 
-        :param value: The debug status, True or False.
-        :type: bool
+        Enabling debug sets the shared ``client`` and ``urllib3`` logger
+        levels to DEBUG. These loggers are process-wide, so disabling debug
+        does not reset their levels. HTTP wire logging is not enabled.
         """
         return self.__debug
 
@@ -514,18 +514,8 @@ conf = client.Configuration(
         """
         self.__debug = value
         if self.__debug:
-            # if debug status is True, turn on debug logging
             for _, logger in self.logger.items():
                 logger.setLevel(logging.DEBUG)
-            # turn on httplib debug
-            httplib.HTTPConnection.debuglevel = 1
-        else:
-            # if debug status is False, turn off debug logging,
-            # setting log level to default `logging.WARNING`
-            for _, logger in self.logger.items():
-                logger.setLevel(logging.WARNING)
-            # turn off httplib debug
-            httplib.HTTPConnection.debuglevel = 0
 
     @property
     def logger_format(self) -> str:
