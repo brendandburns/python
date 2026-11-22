@@ -97,6 +97,19 @@ for event in w.stream(v1.list_namespace, _request_timeout=60):
 print("Ended.")
 ```
 
+For long-running watches, a connection can become silent indefinitely. Set
+`_request_timeout=(connect_timeout, read_timeout)` (in seconds) to opt into a
+client-side read timeout, and handle `urllib3.exceptions.ReadTimeoutError`.
+A read timeout also occurs on a healthy idle watch; it does not establish that
+the connection failed. To resume, start a new watch using the resource version
+of the last fully processed event. Start from a resource version obtained by
+listing the resources; if that version expires (HTTP 410), relist and reconcile
+before watching again. Applications should handle retry backoff and possible
+duplicate events. This differs from the server-side `timeout_seconds`: it is
+not a client-side read timeout, and specifying it (even as `0`) disables the
+watch's automatic retries. Without a client-side read timeout, an idle watch
+continues to wait as before.
+
 More examples can be found in [examples](examples/) folder. To run examples, run this command:
 
 ```shell

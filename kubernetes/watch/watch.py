@@ -179,6 +179,18 @@ class Watch:
         watching from that state on by setting ``resource_version`` to
         one returned from listing.
 
+        A watch can block indefinitely if the connection becomes silent.
+        For an opt-in client-side limit, pass ``_request_timeout=(connect,
+        read)`` in seconds. A read timeout raises urllib3's
+        ``ReadTimeoutError``; it can also occur on a healthy idle watch and
+        does not prove that the connection failed. To recover, start a new
+        watch from the last resource version whose event was fully processed.
+        Obtain an initial resource version by listing, and relist and reconcile
+        if the version has expired (HTTP 410). The caller must handle retries,
+        backoff and duplicate events. This is separate from the server-side
+        ``timeout_seconds``, which limits the server watch and disables this
+        method's automatic retries when specified, even when set to zero.
+
         :param func: The API function pointer. Any parameter to the function
                      can be passed after this parameter.
 
